@@ -1,7 +1,11 @@
 import { build } from 'esbuild'
+import { execFile } from 'node:child_process'
 import { cp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { promisify } from 'node:util'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+const execFileAsync = promisify(execFile)
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const output = join(root, '.vercel/output')
@@ -18,9 +22,13 @@ await build({
   platform: 'node',
   format: 'esm',
   target: 'node22',
-  packages: 'bundle',
+  packages: 'external',
 })
-await writeFile(join(funcDir, 'package.json'), `${JSON.stringify({ type: 'module' }, null, 2)}\n`)
+await writeFile(
+  join(funcDir, 'package.json'),
+  `${JSON.stringify({ type: 'module', dependencies: { '@vercel/blob': '^2.9.0' } }, null, 2)}\n`,
+)
+await execFileAsync('npm', ['install', '--omit=dev', '--ignore-scripts'], { cwd: funcDir })
 await writeFile(
   join(funcDir, '.vc-config.json'),
   `${JSON.stringify(
