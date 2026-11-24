@@ -1,3 +1,3 @@
 export function Mark() {
-  return <span className="mark">getnet</span>
+  return <img className="mark" src="/logo-getnet.png" alt="Getnet" />
 }

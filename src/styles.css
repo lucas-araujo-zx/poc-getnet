@@ -76,12 +76,9 @@ h1 {
 }
 
 .mark {
-  font-family: "Santander Headline", "Santander Text", Helvetica, Arial, sans-serif;
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: -0.05em;
-  line-height: 1;
-  color: var(--ink);
+  display: block;
+  height: 28px;
+  width: auto;
 }
 
 .app, .login-page, .talk {

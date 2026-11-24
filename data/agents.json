@@ -1,3 +1,14 @@
 {
-  "agents": []
+  "agents": [
+    {
+      "id": "agent_6201m5g3cc2cf3qrca8qexm9x1dm",
+      "name": "Ray - Reversão Insucesso",
+      "variables": [
+        "servico",
+        "nome_estabelecimento",
+        "motivo_insucesso"
+      ],
+      "createdAt": "2026-11-24T11:57:36.313Z"
+    }
+  ]
 }
