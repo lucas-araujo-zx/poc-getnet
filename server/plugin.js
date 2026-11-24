@@ -3,7 +3,6 @@ import { isConversationId, presentConversation } from './conversation.js'
 import {
   addCase,
   caseAt,
-  defaultDataDir,
   deleteAgent,
   findAgent,
   listAgents,
@@ -11,6 +10,7 @@ import {
   readCaseRows,
   removeCase,
   replaceCase,
+  resolveStore,
   saveNewAgent,
 } from './store.js'
 import { dynamicVariableNames } from './variables.js'
@@ -70,10 +70,17 @@ async function elevenFetch(env, path, init) {
 }
 
 function dataDirOf(env) {
-  return env.dataDir || defaultDataDir()
+  return resolveStore(env)
 }
 
-function storageError() {
+function storageError(error) {
+  const message = error instanceof Error ? error.message : ''
+  if (/blob credentials|BLOB_READ_WRITE_TOKEN|BLOB_STORE_ID/i.test(message)) {
+    return {
+      status: 503,
+      payload: { error: 'Ligue um Blob store da Vercel a este projeto para gravar agentes e CSVs.' },
+    }
+  }
   return { status: 503, payload: { error: 'A base de agentes não está disponível.' } }
 }
 
@@ -107,9 +114,9 @@ async function registerAgent(env, dir, body) {
   }
   let existing
   try {
-    existing = findAgent(dir, id)
-  } catch {
-    return storageError()
+    existing = await findAgent(dir, id)
+  } catch (error) {
+    return storageError(error)
   }
   if (existing) {
     return { status: 409, payload: { error: 'Esse agente já está cadastrado.' } }
@@ -125,12 +132,16 @@ async function registerAgent(env, dir, body) {
     createdAt: new Date().toISOString(),
   }
   try {
-    const saved = saveNewAgent(dir, record)
+    const saved = await saveNewAgent(dir, record)
     if (saved.error) {
       return { status: 409, payload: { error: 'Esse agente já está cadastrado.' } }
     }
     return { status: 201, payload: { agent: saved.agent } }
-  } catch {
+  } catch (error) {
+    const storedError = storageError(error)
+    if (storedError.payload.error.startsWith('Ligue um Blob')) {
+      return storedError
+    }
     return { status: 503, payload: { error: 'Não foi possível gravar o agente.' } }
   }
 }
@@ -163,7 +174,7 @@ export async function dispatchApi({ method, pathname, searchParams, token, body 
 
   try {
     if (path === '/api/agents' && method === 'GET') {
-      return { status: 200, payload: { agents: listAgents(dir) } }
+      return { status: 200, payload: { agents: await listAgents(dir) } }
     }
     if (path === '/api/agents' && method === 'POST') {
       return await registerAgent(env, dir, body)
@@ -175,7 +186,7 @@ export async function dispatchApi({ method, pathname, searchParams, token, body 
       if (!id) {
         return { status: 400, payload: { error: 'Informe o ID do agente da ElevenLabs.' } }
       }
-      if (!deleteAgent(dir, id)) {
+      if (!(await deleteAgent(dir, id))) {
         return { status: 404, payload: { error: 'Agente não encontrado.' } }
       }
       return { status: 200, payload: { ok: true } }
@@ -184,13 +195,13 @@ export async function dispatchApi({ method, pathname, searchParams, token, body 
     const casesMatch = path.match(/^\/api\/agents\/([^/]+)\/cases$/)
     if (casesMatch && method === 'GET') {
       const id = agentFromPath(casesMatch[1])
-      const agent = id ? findAgent(dir, id) : null
+      const agent = id ? await findAgent(dir, id) : null
       if (!agent) {
         return { status: 404, payload: { error: 'Agente não encontrado.' } }
       }
       return {
         status: 200,
-        payload: { agent: presentAgent(dir, agent), cases: readCaseRows(dir, agent) },
+        payload: { agent: await presentAgent(dir, agent), cases: await readCaseRows(dir, agent) },
       }
     }
     if (casesMatch && method === 'POST') {
@@ -198,7 +209,7 @@ export async function dispatchApi({ method, pathname, searchParams, token, body 
       if (!id) {
         return { status: 404, payload: { error: 'Agente não encontrado.' } }
       }
-      return stored(addCase(dir, id, body?.values ?? {}))
+      return stored(await addCase(dir, id, body?.values ?? {}))
     }
 
     const caseMatch = path.match(/^\/api\/agents\/([^/]+)\/cases\/(\d+)$/)
@@ -209,9 +220,9 @@ export async function dispatchApi({ method, pathname, searchParams, token, body 
         return { status: 404, payload: { error: 'Caso não encontrado.' } }
       }
       if (method === 'DELETE') {
-        return stored(removeCase(dir, id, index))
+        return stored(await removeCase(dir, id, index))
       }
-      return stored(replaceCase(dir, id, index, body?.values))
+      return stored(await replaceCase(dir, id, index, body?.values))
     }
 
     if (path === '/api/signed-url' && method === 'GET') {
@@ -220,7 +231,7 @@ export async function dispatchApi({ method, pathname, searchParams, token, body 
       if (!id || index < 0) {
         return { status: 400, payload: { error: 'Escolha um caso.' } }
       }
-      const selected = caseAt(dir, id, index)
+      const selected = await caseAt(dir, id, index)
       if (selected.error) {
         return { status: selected.status, payload: { error: selected.error } }
       }
@@ -255,7 +266,7 @@ export async function dispatchApi({ method, pathname, searchParams, token, body 
       if (!isConversationId(conversationId)) {
         return { status: 400, payload: { error: 'Informe o ID da conversa.' } }
       }
-      if (!id || !findAgent(dir, id)) {
+      if (!id || !(await findAgent(dir, id))) {
         return { status: 404, payload: { error: 'Agente não encontrado.' } }
       }
       const remote = await elevenFetch(
@@ -271,8 +282,8 @@ export async function dispatchApi({ method, pathname, searchParams, token, body 
       }
       return { status: 200, payload: presentConversation(remote.body, conversationId) }
     }
-  } catch {
-    return storageError()
+  } catch (error) {
+    return storageError(error)
   }
 
   if (!['GET', 'POST', 'PUT', 'DELETE'].includes(method)) {
@@ -330,7 +341,9 @@ export function labApiPlugin(env) {
   const safe = {
     loginToken: env.loginToken?.trim() ?? '',
     apiKey: env.apiKey?.trim() ?? '',
-    dataDir: env.dataDir || defaultDataDir(),
+    dataDir: env.dataDir,
+    blobToken: env.blobToken?.trim() ?? '',
+    vercel: env.vercel === true,
   }
 
   const attach = (middlewares) => {

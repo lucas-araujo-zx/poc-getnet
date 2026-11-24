@@ -1,3 +1,4 @@
+import { build } from 'esbuild'
 import { cp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,12 +10,16 @@ const funcDir = join(output, 'functions/api/login.func')
 await rm(output, { recursive: true, force: true })
 await mkdir(funcDir, { recursive: true })
 await cp(join(root, 'dist'), join(output, 'static'), { recursive: true })
-await cp(join(root, 'server/vercel-handler.js'), join(funcDir, 'index.js'))
-for (const file of ['plugin.js', 'agents.js', 'store.js', 'csv.js', 'variables.js', 'conversation.js']) {
-  await cp(join(root, 'server', file), join(funcDir, file))
-}
-await mkdir(join(funcDir, 'data'), { recursive: true })
-await cp(join(root, 'data/agents.json'), join(funcDir, 'data/agents.json'))
+await build({
+  absWorkingDir: root,
+  entryPoints: ['server/vercel-handler.js'],
+  outfile: join(funcDir, 'index.js'),
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node22',
+  packages: 'bundle',
+})
 await writeFile(join(funcDir, 'package.json'), `${JSON.stringify({ type: 'module' }, null, 2)}\n`)
 await writeFile(
   join(funcDir, '.vc-config.json'),

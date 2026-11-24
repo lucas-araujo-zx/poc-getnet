@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isAgentId } from './agents.js'
 import { normalizeValues, rowsFromCsv, toCsv } from './csv.js'
+import { readText, removeText, writeText } from './files.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const MAX_CASES = 500
@@ -19,19 +20,36 @@ export function defaultDataDir() {
   return project
 }
 
-function registryPath(dir) {
-  return join(dir, 'agents.json')
-}
-
-export function csvFile(dir, id) {
+export function csvName(id) {
   if (!isAgentId(id)) {
     throw new Error('id')
   }
-  return join(dir, `${id}.csv`)
+  return `${id}.csv`
 }
 
-export function readRegistry(dir) {
-  const parsed = JSON.parse(readFileSync(registryPath(dir), 'utf8'))
+export function resolveStore(env = {}) {
+  if (env.dataDir) {
+    return env.dataDir
+  }
+  const token = String(env.blobToken || process.env.BLOB_READ_WRITE_TOKEN || '').trim()
+  const onVercel = env.vercel === true || process.env.VERCEL === '1'
+  if (onVercel || token) {
+    return { kind: 'blob', token: token || undefined }
+  }
+  return defaultDataDir()
+}
+
+export async function readRegistry(dir) {
+  let raw = ''
+  try {
+    raw = await readText(dir, 'agents.json')
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return []
+    }
+    throw error
+  }
+  const parsed = JSON.parse(raw)
   const agents = Array.isArray(parsed?.agents) ? parsed.agents : []
   return agents.filter((item) => item && isAgentId(item.id)).map((item) => ({
     id: item.id,
@@ -43,29 +61,26 @@ export function readRegistry(dir) {
   }))
 }
 
-export function writeRegistry(dir, agents) {
-  mkdirSync(dir, { recursive: true })
+export async function writeRegistry(dir, agents) {
   const payload = `${JSON.stringify({ agents }, null, 2)}\n`
-  const temp = join(dir, `.agents.${process.pid}.json`)
-  writeFileSync(temp, payload)
-  renameSync(temp, registryPath(dir))
+  await writeText(dir, 'agents.json', payload, 'application/json; charset=utf-8')
 }
 
-export function findAgent(dir, id) {
+export async function findAgent(dir, id) {
   if (!isAgentId(id)) {
     return null
   }
-  return readRegistry(dir).find((item) => item.id === id) ?? null
+  const agents = await readRegistry(dir)
+  return agents.find((item) => item.id === id) ?? null
 }
 
-export function readCaseRows(dir, agent) {
-  const file = csvFile(dir, agent.id)
+export async function readCaseRows(dir, agent) {
   let text = ''
   try {
-    text = readFileSync(file, 'utf8')
+    text = await readText(dir, csvName(agent.id))
   } catch (error) {
     if (error?.code === 'ENOENT') {
-      writeCases(dir, agent, [])
+      await writeCases(dir, agent, [])
       return []
     }
     throw error
@@ -73,15 +88,15 @@ export function readCaseRows(dir, agent) {
   return rowsFromCsv(text, agent.variables)
 }
 
-export function writeCases(dir, agent, rows) {
+export async function writeCases(dir, agent, rows) {
   const cells = rows.map((values) => agent.variables.map((name) => values[name] ?? ''))
-  writeFileSync(csvFile(dir, agent.id), toCsv(agent.variables, cells))
+  await writeText(dir, csvName(agent.id), toCsv(agent.variables, cells), 'text/csv; charset=utf-8')
 }
 
-export function presentAgent(dir, agent) {
+export async function presentAgent(dir, agent) {
   let caseCount = 0
   try {
-    caseCount = readCaseRows(dir, agent).length
+    caseCount = (await readCaseRows(dir, agent)).length
   } catch {
     caseCount = 0
   }
@@ -94,57 +109,48 @@ export function presentAgent(dir, agent) {
   }
 }
 
-export function listAgents(dir) {
-  return readRegistry(dir).map((agent) => presentAgent(dir, agent))
+export async function listAgents(dir) {
+  const agents = await readRegistry(dir)
+  return Promise.all(agents.map((agent) => presentAgent(dir, agent)))
 }
 
-export function saveNewAgent(dir, record) {
-  const agents = readRegistry(dir)
+export async function saveNewAgent(dir, record) {
+  const agents = await readRegistry(dir)
   if (agents.some((item) => item.id === record.id)) {
     return { error: 'exists' }
   }
-  writeCases(dir, record, [])
+  await writeCases(dir, record, [])
   try {
-    writeRegistry(dir, [...agents, record])
+    await writeRegistry(dir, [...agents, record])
   } catch (error) {
-    try {
-      unlinkSync(csvFile(dir, record.id))
-    } catch {
-      // O CSV órfão fica para a próxima tentativa limpar.
-    }
+    await removeText(dir, csvName(record.id))
     throw error
   }
-  return { agent: presentAgent(dir, record) }
+  return { agent: await presentAgent(dir, record) }
 }
 
-export function deleteAgent(dir, id) {
-  const agents = readRegistry(dir)
+export async function deleteAgent(dir, id) {
+  const agents = await readRegistry(dir)
   if (!agents.some((item) => item.id === id)) {
     return false
   }
-  writeRegistry(dir, agents.filter((item) => item.id !== id))
-  try {
-    unlinkSync(csvFile(dir, id))
-  } catch (error) {
-    if (error?.code !== 'ENOENT') {
-      throw error
-    }
-  }
+  await writeRegistry(dir, agents.filter((item) => item.id !== id))
+  await removeText(dir, csvName(id))
   return true
 }
 
-function mutate(dir, id, change) {
-  const agent = findAgent(dir, id)
+async function mutate(dir, id, change) {
+  const agent = await findAgent(dir, id)
   if (!agent) {
     return { status: 404, error: 'Agente não encontrado.' }
   }
-  const cases = readCaseRows(dir, agent)
+  const cases = await readCaseRows(dir, agent)
   const next = change(agent, cases)
   if (next.error) {
     return next
   }
-  writeCases(dir, agent, next.cases)
-  return { status: 200, agent: presentAgent(dir, agent), cases: next.cases }
+  await writeCases(dir, agent, next.cases)
+  return { status: 200, agent: await presentAgent(dir, agent), cases: next.cases }
 }
 
 export function addCase(dir, id, input) {
@@ -184,12 +190,12 @@ export function removeCase(dir, id, index) {
   })
 }
 
-export function caseAt(dir, id, index) {
-  const agent = findAgent(dir, id)
+export async function caseAt(dir, id, index) {
+  const agent = await findAgent(dir, id)
   if (!agent) {
     return { status: 404, error: 'Agente não encontrado.' }
   }
-  const cases = readCaseRows(dir, agent)
+  const cases = await readCaseRows(dir, agent)
   if (!Number.isInteger(index) || index < 0 || index >= cases.length) {
     return { status: 404, error: 'Caso não encontrado.' }
   }

@@ -41,11 +41,11 @@ test('o csv guarda cabeçalho, aspas e caso sem variáveis', () => {
   assert.deepEqual(rowsFromCsv(toCsv([], []), []), [])
 })
 
-test('cadastrar um agente cria o json e o csv só com cabeçalho', () => {
+test('cadastrar um agente cria o json e o csv só com cabeçalho', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'getnet-store-'))
   writeFileSync(join(dir, 'agents.json'), '{"agents":[]}\n')
   try {
-    const saved = saveNewAgent(dir, {
+    const saved = await saveNewAgent(dir, {
       id: AGENT,
       name: 'Atendimento',
       variables: ['nome', 'documento'],
@@ -57,17 +57,52 @@ test('cadastrar um agente cria o json e o csv só com cabeçalho', () => {
     const registry = JSON.parse(readFileSync(join(dir, 'agents.json'), 'utf8'))
     assert.equal(registry.agents[0].id, AGENT)
 
-    const invalid = addCase(dir, AGENT, { nome: 'x'.repeat(2001), documento: '1' })
+    const invalid = await addCase(dir, AGENT, { nome: 'x'.repeat(2001), documento: '1' })
     assert.equal(invalid.status, 400)
 
-    const created = addCase(dir, AGENT, { nome: 'Lia', documento: '123' })
+    const created = await addCase(dir, AGENT, { nome: 'Lia', documento: '123' })
     assert.equal(created.cases.length, 1)
-    const edited = replaceCase(dir, AGENT, 0, { nome: 'Lia Souza', documento: '123' })
+    const edited = await replaceCase(dir, AGENT, 0, { nome: 'Lia Souza', documento: '123' })
     assert.equal(edited.cases[0].nome, 'Lia Souza')
-    const removed = removeCase(dir, AGENT, 0)
+    const removed = await removeCase(dir, AGENT, 0)
     assert.equal(removed.cases.length, 0)
-    assert.equal(readCaseRows(dir, saved.agent).length, 0)
+    assert.equal((await readCaseRows(dir, saved.agent)).length, 0)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('o blob guarda o json e o csv e lê a versão gravada', async () => {
+  const files = new Map()
+  const dir = {
+    kind: 'blob',
+    client: {
+      async get(pathname) {
+        if (!files.has(pathname)) {
+          return null
+        }
+        return { statusCode: 200, stream: new Response(files.get(pathname)).body }
+      },
+      async put(pathname, body) {
+        files.set(pathname, String(body))
+      },
+      async del(pathname) {
+        files.delete(pathname)
+      },
+    },
+  }
+  const saved = await saveNewAgent(dir, {
+    id: AGENT,
+    name: 'Voz',
+    variables: ['nome'],
+    createdAt: '2026-11-24T00:00:00.000Z',
+  })
+  assert.equal(saved.agent.caseCount, 0)
+  assert.match(files.get('getnet-lab/agents.json'), /agent_demo1234567890/)
+  assert.match(files.get(`getnet-lab/${AGENT}.csv`), /nome/)
+  const created = await addCase(dir, AGENT, { nome: 'Lia' })
+  assert.equal(created.cases[0].nome, 'Lia')
+  const edited = await replaceCase(dir, AGENT, 0, { nome: 'Lia Costa' })
+  assert.equal(edited.cases[0].nome, 'Lia Costa')
+  assert.match(files.get(`getnet-lab/${AGENT}.csv`), /Lia Costa/)
 })

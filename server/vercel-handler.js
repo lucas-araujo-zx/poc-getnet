@@ -1,5 +1,4 @@
 import { dispatchApi } from './plugin.js'
-import { defaultDataDir } from './store.js'
 
 function headerValue(req, name) {
   const value = req.headers[name] ?? req.headers[name.toLowerCase()]
@@ -81,7 +80,8 @@ export default async function handler(req, res) {
       {
         loginToken: process.env.GETNET_LOGIN_TOKEN || process.env.ALMAVIVA_LOGIN_TOKEN || process.env.ICATU_LOGIN_TOKEN || '',
         apiKey: process.env.ELEVENLABS_API_KEY ?? '',
-        dataDir: defaultDataDir(),
+        blobToken: process.env.BLOB_READ_WRITE_TOKEN ?? '',
+        vercel: process.env.VERCEL === '1',
       },
     )
     res.status(result?.status ?? 404).json(result?.payload ?? { error: 'Não encontrado.' })

@@ -36,6 +36,7 @@ export default defineConfig(({ mode }) => {
       labApiPlugin({
         loginToken: labEnv.GETNET_LOGIN_TOKEN || labEnv.ALMAVIVA_LOGIN_TOKEN || labEnv.ICATU_LOGIN_TOKEN,
         apiKey: labEnv.ELEVENLABS_API_KEY,
+        blobToken: labEnv.BLOB_READ_WRITE_TOKEN,
       }),
     ],
     resolve: {
